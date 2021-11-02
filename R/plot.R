@@ -43,7 +43,7 @@
 #' @details
 #' \code{plot} always sends a plot to a graphics device, wheres \code{autoplot}
 #' behaves as any \code{ggplot() + layer()} combination. That means, customized
-#' plots should be created using \code{autoplot}.
+#' plots should be created using \code{autoplot} and \code{autolayer}.
 #'
 #' Three sets of default parameter values are used:
 #' \itemize{
@@ -61,7 +61,8 @@
 #'
 #' Setting any of the \code{params_*} arguments to \code{NA} disables that layer.
 #'
-#' Default parameter values if \code{length(object) > 1}:
+#' Default parameter values if \code{length(object) > 1},
+#' where the internal variable \code{forecast} is used as grouping variable:
 #' \tabular{ll}{
 #' \code{params_histogram} \tab \code{NA} \cr
 #' \code{params_ggMarginal} \tab \code{NA} \cr
@@ -109,6 +110,10 @@
 #' # simple plotting
 #' plot(r)
 #'
+#' # faceting using the internal grouping variable 'forecast'
+#' autoplot(r, params_histogram = list(colour = "black", fill = NA)) +
+#'   ggplot2::facet_wrap("forecast")
+#'
 #' # custom color scale for multiple prediction methods
 #' cols <- c(Logistic = "red", EMOS = "blue", ENS = "darkgreen", EPC = "orange")
 #' autoplot(r) +
@@ -133,6 +138,10 @@
 #' p <- ggExtra::ggMarginal(p, type = "histogram")
 #' print(p, newpage = TRUE)
 #'
+#' # the order of the layers can be changed
+#' autoplot(rr, colour = "black", params_ribbon = NA) +
+#'   autolayer(rr, params_ribbon = list(fill = "red", alpha = .5))
+#'
 #' @name plot.reliabilitydiag
 NULL
 
@@ -147,6 +156,10 @@ plot.reliabilitydiag <- function(x, ...) {
 #' @importFrom ggplot2 autoplot
 #' @export
 ggplot2::autoplot
+
+#' @importFrom ggplot2 autolayer
+#' @export
+ggplot2::autolayer
 
 #' @rdname plot.reliabilitydiag
 #'
@@ -165,10 +178,92 @@ autoplot.reliabilitydiag <- function(object,
                                      params_CEPsegment = NULL,
                                      params_CEPpoint = NULL) {
   r <- object
+  type1 <- match.arg(type)
+  if (length(r) > 1L) {
+    type1 <- ""
+  }
+
+  # loading default values for params_ggMarginal
+  if (is.null(params_ggMarginal)) {
+    params_ggMarginal <- switch(
+      type1,
+      miscalibration = NA,
+      discrimination = list(
+        type = "histogram",
+        xparams = list(bins = 100, fill = "grey"),
+        yparams = list(bins = 100, fill = colour)
+      ),
+      NA)
+  }
+
+  # create ggplot object
+  p.reldiag <- ggplot2::ggplot() +
+    ggplot2::xlab("Forecast value") +
+    ggplot2::ylab("CEP") +
+    ggplot2::theme_bw() +
+    ggplot2::theme(aspect.ratio = 1) +
+    autolayer.reliabilitydiag(
+      object = object,
+      ...,
+      type = type,
+      colour = colour,
+      params_histogram = params_histogram,
+      params_ggMarginal = params_ggMarginal,
+      params_ribbon = params_ribbon,
+      params_diagonal = params_diagonal,
+      params_vsegment = params_vsegment,
+      params_hsegment = params_hsegment,
+      params_CEPline = params_CEPline,
+      params_CEPsegment = params_CEPsegment,
+      params_CEPpoint = params_CEPpoint
+    )
+
+  # return plot object
+  if (!isTRUE(is.na(params_ggMarginal))) {
+    do.call(
+      what = ggExtra::ggMarginal,
+      args = c(
+        list(p = p.reldiag),
+        params_ggMarginal
+      ))
+  } else {
+    p.reldiag
+  }
+}
+
+#' @rdname plot.reliabilitydiag
+#'
+#' @export
+autolayer.reliabilitydiag <- function(object,
+                                      ...,
+                                      type = c("miscalibration", "discrimination"),
+                                      colour = "red",
+                                      params_histogram = NA,
+                                      params_ggMarginal = NA,
+                                      params_ribbon = NA,
+                                      params_diagonal = NA,
+                                      params_vsegment = NA,
+                                      params_hsegment = NA,
+                                      params_CEPline = NA,
+                                      params_CEPsegment = NA,
+                                      params_CEPpoint = NA) {
+  r <- object
   type <- match.arg(type)
   if (length(r) > 1L) {
     type <- ""
   }
+  layerlist <- list()
+  cases <- quote(
+    dplyr::bind_rows(lapply(r, function(l) l$cases), .id = "forecast"))
+  bins <- quote(
+    dplyr::bind_rows(lapply(r, function(l){
+      tidyr::pivot_longer(
+        l$bins,
+        cols = dplyr::all_of(c("x_min", "x_max")),
+        values_to = "x")
+    }), .id = "forecast"))
+  regions <- quote(
+    dplyr::bind_rows(lapply(r, function(l) l$regions), .id = "forecast"))
 
   # loading default values
   if (is.null(params_histogram)) {
@@ -176,17 +271,6 @@ autoplot.reliabilitydiag <- function(object,
       type,
       miscalibration = list(yscale = 0.2, colour = "black", fill = NA),
       discrimination = NA,
-      NA)
-  }
-  if (is.null(params_ggMarginal)) {
-    params_ggMarginal <- switch(
-      type,
-      miscalibration = NA,
-      discrimination = list(
-        type = "histogram",
-        xparams = list(bins = 100, fill = "grey"),
-        yparams = list(bins = 100, fill = colour)
-      ),
       NA)
   }
   if (is.null(params_ribbon)) {
@@ -250,24 +334,22 @@ autoplot.reliabilitydiag <- function(object,
       NA)
   }
 
-  # initialize plot object
-  p.reldiag <- ggplot2::ggplot() +
-    ggplot2::xlab("Forecast value") +
-    ggplot2::ylab("CEP") +
-    ggplot2::theme_bw() +
-    ggplot2::theme(aspect.ratio = 1)
-
   # add layers
   if (!isTRUE(is.na(params_histogram))) {
     ### Add a Histogram
     # possible 'breaks' specifications in ggplot2::geom_histogram
     breaks_specs <- c("breaks", "binwidth", "bins", "center", "boundary")
     if (!any(breaks_specs %in% names(params_histogram))) {
-      # see utils.R
-      params_histogram$breaks <- choose_breaks(
-        x = r[[1L]]$cases$x,
-        xtype = r[[1L]]$xinfo$type
-      )
+      if (length(r) == 1L) {
+        # see utils.R
+        params_histogram$breaks <- choose_breaks(
+          x = r[[1L]]$cases$x,
+          xtype = r[[1L]]$xinfo$type
+        )
+      } else if (length(r) > 1L) {
+        params_histogram$binwidth <- width_fd
+        params_histogram$boundary <- 0
+      }
     }
     if (i <- "yscale" %in% names(params_histogram)) {
       yscale <- params_histogram[[which(i)]]
@@ -275,45 +357,52 @@ autoplot.reliabilitydiag <- function(object,
     } else {
       yscale <- 0.2
     }
-    p.reldiag <- p.reldiag +
+    cases <- eval(cases)
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_histogram,
         args = c(
-          list(data = r[[1L]]$cases),
+          list(data = cases),
           list(mapping = ggplot2::aes(
             x = .data$x, y = yscale * ggplot2::after_stat(.data$ncount))),
           params_histogram
-        ))
+        )))
   }
   if (!isTRUE(is.na(params_ribbon))) {
     ### Add ribbon for consistency/confidence regions
-    p.reldiag <- p.reldiag +
+    regions <- eval(regions)
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_ribbon,
         args = c(
-          list(data = r[[1L]]$regions),
+          list(data = regions),
           list(mapping = ggplot2::aes(
             x = .data$x, ymin = .data$lower, ymax = .data$upper)),
           params_ribbon
-        ))
+        )))
   }
   if (!isTRUE(is.na(params_diagonal))) {
     ### Add the diagonal line
-    p.reldiag <- p.reldiag +
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_segment,
         args = c(
           list(data = data.frame(1)),
           list(mapping = ggplot2::aes(x = 0, y = 0, xend = 1, yend = 1)),
           params_diagonal
-        ))
+        )))
   }
   if (!isTRUE(is.na(params_vsegment))) {
-    p.reldiag <- p.reldiag +
+    cases <- eval(cases)
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_segment,
         args = c(
-          list(data = r[[1L]]$cases),
+          list(data = cases),
           list(mapping = ggplot2::aes(
             x = mean(.data$x),
             xend = mean(.data$x),
@@ -321,13 +410,16 @@ autoplot.reliabilitydiag <- function(object,
             yend = max(.data$CEP_pav)
           )),
           params_vsegment))
+    )
   }
   if (!isTRUE(is.na(params_hsegment))) {
-    p.reldiag <- p.reldiag +
+    cases <- eval(cases)
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_segment,
         args = c(
-          list(data = r[[1L]]$cases),
+          list(data = cases),
           list(mapping = ggplot2::aes(
             x = min(.data$x),
             xend = max(.data$x),
@@ -335,40 +427,33 @@ autoplot.reliabilitydiag <- function(object,
             yend = mean(.data$y)
           )),
           params_hsegment))
+    )
   }
   if (!isTRUE(is.na(params_CEPline))) {
+    bins <- eval(bins)
     ### Plot the estimated CEP
-    if (identical(length(r), 1L)) {
-      p.reldiag <- p.reldiag +
-        do.call(
-          what = ggplot2::geom_line,
-          args = c(
-            list(data = tidyr::pivot_longer(
-              r[[1L]]$bins,
-              cols = dplyr::all_of(c("x_min", "x_max")),
-              values_to = "x")),
-            list(mapping = ggplot2::aes(x = .data$x, y = .data$CEP_pav)),
-            params_CEPline))
-    } else if (length(r) > 1L) {
-      p.reldiag <- p.reldiag +
-        do.call(
-          what = ggplot2::geom_line,
-          args = c(
-            list(data = lapply(r, function(l) {
-              tidyr::pivot_longer(
-                l$bins,
-                cols = dplyr::all_of(c("x_min", "x_max")),
-                values_to = "x")
-            }) %>%
-              dplyr::bind_rows(.id = "Forecast")),
-            list(mapping = ggplot2::aes(
-              x = .data$x, y = .data$CEP_pav, col = .data$Forecast)),
-            params_CEPline))
-    }
+    layerlist <- c(
+      layerlist,
+      do.call(
+        what = ggplot2::geom_line,
+        args = c(
+          list(data = bins),
+          list(mapping = if (length(r) == 1L) {
+            ggplot2::aes(x = .data$x, y = .data$CEP_pav)
+          } else if (length(r) > 1L) {
+            ggplot2::aes(x = .data$x, y = .data$CEP_pav,
+                         col = .data$forecast, lty = .data$forecast)
+          }),
+          params_CEPline)),
+      if (length(r) > 1L) {
+        ggplot2::scale_linetype_manual(values = rep(1, length(r)))
+      }
+    )
   }
   if (!isTRUE(is.na(params_CEPsegment))) {
-    ### Add thick line for continuous forecasts
-    p.reldiag <- p.reldiag +
+    ### Add horizontal segments for continuous forecasts
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_segment,
         args = c(
@@ -378,9 +463,11 @@ autoplot.reliabilitydiag <- function(object,
             y = .data$CEP_pav, yend = .data$CEP_pav)),
           params_CEPsegment
         ))
+    )
   }
   if (!isTRUE(is.na(params_CEPpoint))) {
-    p.reldiag <- p.reldiag +
+    layerlist <- c(
+      layerlist,
       do.call(
         what = ggplot2::geom_point,
         args = c(
@@ -394,17 +481,8 @@ autoplot.reliabilitydiag <- function(object,
           }),
           list(mapping = ggplot2::aes(x = .data$x, y = .data$CEP_pav)),
           params_CEPpoint))
+    )
   }
 
-  # return plot object
-  if (!isTRUE(is.na(params_ggMarginal))) {
-    do.call(
-      what = ggExtra::ggMarginal,
-      args = c(
-        list(p = p.reldiag),
-        params_ggMarginal
-      ))
-  } else {
-    p.reldiag
-  }
+  layerlist
 }
